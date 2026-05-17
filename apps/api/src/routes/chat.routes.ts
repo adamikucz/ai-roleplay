@@ -6,7 +6,7 @@ import { generateTurn } from "../services/generation.service.js";
 
 export async function chatRoutes(app: FastifyInstance) {
   app.post('/chat/stream', async (request, reply) => {
-    prepareSse(reply);
+    prepareSse(reply, request);
     try {
       const user = getAuthUser(request);
       await generateTurn({ userId: user.id, payload: request.body, emit: event => sendEvent(reply, event) });
