@@ -1,11 +1,13 @@
 import pg from "pg";
 import { env } from "../env.js";
 
-export const pool = new pg.Pool({
+const { Pool } = pg;
+
+export const pool = new Pool({
   connectionString: env.DATABASE_URL,
-  max: 24,
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000
+  ssl: env.DATABASE_URL.includes("supabase")
+    ? { rejectUnauthorized: false }
+    : undefined
 });
 
 export async function query<T = unknown>(text: string, params: unknown[] = []) {
