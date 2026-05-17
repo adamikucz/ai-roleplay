@@ -1,0 +1,4 @@
+"use client";
+import { motion } from "framer-motion";
+import type { UiMessage } from "@/store/chat.store";
+export function MessageBubble({ message }: { message: UiMessage }) { const user=message.role==='user'; return <motion.article layout initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:8}} transition={{duration:.25,ease:'easeOut'}} className={`flex ${user?'justify-end':'justify-start'}`}><div className={["max-w-[88%] whitespace-pre-wrap rounded-[1.6rem] px-5 py-4 text-[15px] leading-7 shadow-2xl md:max-w-[74%]", user?"bg-violet-500/90 text-white":"border border-white/10 bg-white/[.07] text-white/90 backdrop-blur-xl"].join(' ')}>{message.content}{message.streaming&&<span className="ml-1 inline-block h-4 w-2 animate-pulse rounded-full bg-white/70 align-middle"/>}</div></motion.article>; }

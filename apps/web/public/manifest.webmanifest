@@ -1,0 +1,11 @@
+{
+  "name": "Aether Roleplay",
+  "short_name": "Aether",
+  "description": "Persistent cinematic AI roleplay platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070814",
+  "theme_color": "#11132c",
+  "orientation": "portrait-primary",
+  "icons": []
+}

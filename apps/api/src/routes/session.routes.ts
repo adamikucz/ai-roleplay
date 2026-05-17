@@ -1,0 +1,26 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { getAuthUser } from "../auth/require-auth.js";
+import { createSession, listSessions } from "../repositories/sessions.repo.js";
+import { getCharacter } from "../repositories/characters.repo.js";
+import { DEFAULT_SCENE } from "../engines/scene.engine.js";
+
+export async function sessionRoutes(app: FastifyInstance) {
+  app.get('/sessions', async (request, reply) => {
+    try { const user = getAuthUser(request); return { sessions: await listSessions(user.id) }; }
+    catch { return reply.unauthorized('Unauthorized'); }
+  });
+
+  app.post('/sessions', async (request, reply) => {
+    try {
+      const user = getAuthUser(request);
+      const body = z.object({ characterId: z.string().uuid(), title: z.string().max(120).optional() }).parse(request.body);
+      const character = await getCharacter(body.characterId, user.id);
+      if (!character) return reply.notFound('Character not found');
+      return await createSession({ userId: user.id, characterId: body.characterId, title: body.title, scene: DEFAULT_SCENE });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Unauthorized') return reply.unauthorized('Unauthorized');
+      throw error;
+    }
+  });
+}
