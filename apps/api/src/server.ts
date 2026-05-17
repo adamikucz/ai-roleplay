@@ -12,6 +12,22 @@ import { startMemoryMaintenanceJob } from "./jobs/memory-maintenance.job.js";
 
 const app = Fastify({ logger: true, bodyLimit: 1024 * 1024 * 5 });
 
+app.get("/", async () => {
+  return {
+    ok: true,
+    service: "aether-api",
+    status: "running"
+  };
+});
+
+app.get("/healthz", async () => {
+  return {
+    ok: true,
+    service: "aether-api",
+    uptime: process.uptime()
+  };
+});
+
 await app.register(cors, { origin: env.WEB_ORIGIN, credentials: true });
 await app.register(sensible);
 await app.register(rateLimit, { max: 240, timeWindow: '1 minute' });
