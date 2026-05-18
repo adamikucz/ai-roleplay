@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getAuthUser } from "../auth/require-auth.js";
-import { createSession, listSessions, deleteSession, recoverSession } from "../repositories/sessions.repo.js";
+import { createSession, listSessions, archiveSession, recoverSession } from "../repositories/sessions.repo.js";
 import { getCharacter } from "../repositories/characters.repo.js";
 import { getSessionMessagesPage } from "../repositories/messages.repo.js";
 import { DEFAULT_SCENE } from "../engines/scene.engine.js";
@@ -41,7 +41,7 @@ export async function sessionRoutes(app: FastifyInstance) {
     try {
       const user = getAuthUser(request);
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      await deleteSession(id, user.id);
+      await archiveSession(id, user.id);
       return { ok: true };
     } catch (error) {
       if (error instanceof Error && error.message === 'Unauthorized') return reply.unauthorized('Unauthorized');
