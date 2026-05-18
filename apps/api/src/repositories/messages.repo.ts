@@ -26,3 +26,16 @@ export async function getSessionTranscript(sessionId: string, limit = 120) {
   );
   return result.rows.reverse();
 }
+
+export async function getSessionMessagesPage(sessionId: string, page = 1, limit = 50) {
+  const offset = (page - 1) * limit;
+  const [countResult, result] = await Promise.all([
+    query<{ total: string }>(`select count(*)::text as total from messages where session_id=$1 and role != 'system'`, [sessionId]),
+    query<{ id:string; role:'user'|'assistant'; content:string; createdAt:string }>(
+      `select id, role, content, created_at as "createdAt" from messages where session_id=$1 and role != 'system' order by created_at asc limit $2 offset $3`,
+      [sessionId, limit, offset]
+    )
+  ]);
+  const total = Number(countResult.rows[0]?.total ?? 0);
+  return { messages: result.rows, total, page, totalPages: Math.ceil(total / limit) };
+}

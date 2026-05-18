@@ -1,0 +1,392 @@
+﻿PROJECT AI DEBUG DUMP
+Root: C:\Users\Jakub\Desktop\ai-roleplay-platform
+Generated: 2026-05-17T17:42:16.9208984+02:00
+
+
+============================================================
+FILE: apps/api/src/services/generation.service.ts
+============================================================
+
+import { ClientMessageSchema, type StreamEvent } from "@aether/shared";
+import { getCharacter } from "../repositories/characters.repo.js";
+import { getSession, updateSessionScene } from "../repositories/sessions.repo.js";
+import { createMessage } from "../repositories/messages.repo.js";
+import { getRelationshipState, upsertRelationshipState } from "../repositories/relationship.repo.js";
+import { evolveRelationship } from "../engines/relationship.engine.js";
+import { retrieveMemoryContext, writeTurnMemories } from "../engines/memory.engine.js";
+import { reconstructContext } from "../engines/context.engine.js";
+import { composeSystemPrompt } from "../ai/prompt-orchestrator.js";
+import { chooseModel } from "../ai/model-router.js";
+import { streamOpenRouter } from "../ai/openrouter.client.js";
+import { scoreResponse } from "../ai/response-quality.js";
+import { evolveScene } from "../engines/scene.engine.js";
+import { query } from "../db/pool.js";
+import { sha256 } from "../utils/hash.js";
+
+export async function generateTurn(input: { userId:string; payload:unknown; signal?:AbortSignal; emit:(event:StreamEvent)=>void }) {
+  const body = ClientMessageSchema.parse(input.payload);
+  input.emit({ type:'status', stage:'memory' });
+  const [character, session] = await Promise.all([getCharacter(body.characterId, input.userId), getSession(body.sessionId, input.userId)]);
+  if (!character) throw new Error('Character not found');
+  if (!session) throw new Error('Session not found');
+  await createMessage({ sessionId: body.sessionId, role:'user', content: body.content });
+  input.emit({ type:'status', stage:'relationship' });
+  const previous = await getRelationshipState(input.userId, body.characterId);
+  const relationship = evolveRelationship({ previous, userMessage: body.content });
+  await upsertRelationshipState(input.userId, body.characterId, relationship);
+  const [memoryContext, contextMessages] = await Promise.all([
+    retrieveMemoryContext({ userId: input.userId, characterId: body.characterId, sessionId: body.sessionId }),
+    reconstructContext(body.sessionId)
+  ]);
+  const system = composeSystemPrompt({ character, relationship, scene: session.scene_state, memoryContext });
+  const emotionalIntensity = relationship.tension*.32 + relationship.intimacy*.23 + relationship.vulnerability*.23 + relationship.attachment*.12 + relationship.jealousy*.10;
+  const route = chooseModel({ preference: body.modelPreference, emotionalIntensity, contextChars: JSON.stringify(contextMessages).length, lastModel: session.last_model });
+  const messages = [{ role:'system' as const, content: system }, ...contextMessages];
+  input.emit({ type:'status', stage:'generating' });
+  let generated = ''; let latencyMs = 0; let usedModel = route.primary; let lastError: unknown;
+  for (const model of [route.primary, ...route.fallback]) {
+    try {
+      usedModel = model;
+      const result = await streamOpenRouter({ model, messages, temperature: route.temperature, maxTokens: route.maxTokens, signal: input.signal, onToken: token => input.emit({ type:'token', token }) });
+      generated = result.text; latencyMs = result.latencyMs; break;
+    } catch (e) { lastError = e; }
+  }
+  if (!generated.trim()) throw lastError instanceof Error ? lastError : new Error('Generation failed');
+  const quality = scoreResponse({ response: generated, relationship, userMessage: body.content });
+  input.emit({ type:'status', stage:'saving' });
+  const message = await createMessage({ sessionId: body.sessionId, role:'assistant', content: generated, model: usedModel, qualityScore: quality });
+  const scene = evolveScene({ previous: session.scene_state, userMessage: body.content, assistantMessage: generated });
+  await Promise.all([
+    updateSessionScene({ sessionId: body.sessionId, userId: input.userId, scene, model: usedModel }),
+    writeTurnMemories({ userId: input.userId, characterId: body.characterId, sessionId: body.sessionId, userMessage: body.content, assistantMessage: generated }),
+    query(`insert into generation_audits (session_id, model, prompt_hash, latency_ms, quality_score) values ($1,$2,$3,$4,$5)`, [body.sessionId, usedModel, sha256(system), latencyMs, quality])
+  ]);
+  input.emit({ type:'meta', relationship, scene, model: usedModel, quality });
+  input.emit({ type:'done', messageId: message.id });
+}
+
+
+============================================================
+FILE: apps/api/src/ai/openrouter.client.ts
+============================================================
+
+import { env } from "../env.js";
+
+type Message = { role:'system'|'user'|'assistant'; content:string };
+
+export async function streamOpenRouter(input: { model:string; messages:Message[]; temperature:number; maxTokens:number; signal?:AbortSignal; onToken:(token:string)=>void }) {
+  const started = Date.now();
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method:'POST', signal: input.signal,
+    headers: { Authorization:`Bearer ${env.OPENROUTER_API_KEY}`, 'Content-Type':'application/json', 'HTTP-Referer':env.OPENROUTER_SITE_URL, 'X-Title':env.OPENROUTER_APP_NAME },
+    body: JSON.stringify({ model:input.model, messages:input.messages, stream:true, temperature:input.temperature, max_tokens:input.maxTokens })
+  });
+  if (!res.ok || !res.body) throw new Error(`OpenRouter ${res.status}: ${await res.text().catch(()=> '')}`);
+  const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf=''; let full='';
+  while (true) {
+    const {done, value} = await reader.read(); if (done) break;
+    buf += decoder.decode(value, {stream:true});
+    const lines = buf.split('\n'); buf = lines.pop() ?? '';
+    for (const line of lines) {
+      const trimmed = line.trim(); if (!trimmed.startsWith('data:')) continue;
+      const payload = trimmed.replace(/^data:\s*/, ''); if (payload === '[DONE]') return { text: full, latencyMs: Date.now()-started };
+      try { const json = JSON.parse(payload); const token = json.choices?.[0]?.delta?.content ?? ''; if (token) { full += token; input.onToken(token); } } catch {}
+    }
+  }
+  return { text: full, latencyMs: Date.now()-started };
+}
+
+
+============================================================
+FILE: apps/api/src/ai/model-router.ts
+============================================================
+
+export type ModelRoute = { primary:string; fallback:string[]; temperature:number; maxTokens:number; reason:string };
+export function chooseModel(input: { preference?: string; emotionalIntensity:number; contextChars:number; lastModel?: string | null }): ModelRoute {
+  if (input.preference) return { primary: input.preference, fallback:['anthropic/claude-3.5-sonnet','openai/gpt-4o-mini'], temperature:.86, maxTokens:1400, reason:'explicit_preference' };
+  if (input.contextChars > 34000) return { primary:'google/gemini-2.0-flash-001', fallback:['anthropic/claude-3.5-sonnet','openai/gpt-4o-mini'], temperature:.82, maxTokens:1600, reason:'large_context' };
+  if (input.emotionalIntensity > 72) return { primary:'anthropic/claude-3.5-sonnet', fallback:['openai/gpt-4o','google/gemini-2.0-flash-001'], temperature:.88, maxTokens:1500, reason:'high_emotional_intensity' };
+  return { primary:'openai/gpt-4o-mini', fallback:['google/gemini-2.0-flash-001','anthropic/claude-3.5-sonnet'], temperature:.84, maxTokens:1200, reason:'balanced_latency_quality' };
+}
+
+
+============================================================
+FILE: apps/api/src/ai/sse.ts
+============================================================
+
+import type { FastifyReply } from "fastify";
+import type { StreamEvent } from "@aether/shared";
+export function prepareSse(reply: FastifyReply) {
+  reply.raw.writeHead(200, { 'Content-Type':'text/event-stream; charset=utf-8', 'Cache-Control':'no-cache, no-transform', Connection:'keep-alive', 'X-Accel-Buffering':'no' });
+}
+export function sendEvent(reply: FastifyReply, event: StreamEvent) { reply.raw.write(`data: ${JSON.stringify(event)}\n\n`); }
+
+
+============================================================
+FILE: apps/api/src/routes/chat.routes.ts
+============================================================
+
+import type { FastifyInstance } from "fastify";
+import { prepareSse, sendEvent } from "../ai/sse.js";
+import { getAuthUser, } from "../auth/require-auth.js";
+import { verifyAuthToken } from "../auth/jwt.js";
+import { generateTurn } from "../services/generation.service.js";
+
+export async function chatRoutes(app: FastifyInstance) {
+  app.post('/chat/stream', async (request, reply) => {
+    prepareSse(reply);
+    try {
+      const user = getAuthUser(request);
+      await generateTurn({ userId: user.id, payload: request.body, emit: event => sendEvent(reply, event) });
+    } catch (error) {
+      sendEvent(reply, { type:'error', message: error instanceof Error ? error.message : 'Unknown error' });
+    } finally {
+      reply.raw.end();
+    }
+  });
+
+  app.get('/chat/ws', { websocket: true }, (socket, request) => {
+    socket.on('message', async raw => {
+      const controller = new AbortController();
+      try {
+        const parsed = JSON.parse(raw.toString());
+        const token = String(parsed.token ?? '');
+        const user = verifyAuthToken(token);
+        await generateTurn({ userId: user.id, payload: parsed.payload, signal: controller.signal, emit: event => socket.send(JSON.stringify(event)) });
+      } catch (error) {
+        socket.send(JSON.stringify({ type:'error', message: error instanceof Error ? error.message : 'Unknown websocket error' }));
+      }
+    });
+    socket.on('close', () => {});
+  });
+}
+
+
+============================================================
+FILE: apps/web/src/lib/streamChat.ts
+============================================================
+
+import type { StreamEvent } from "@aether/shared";
+import { API, tokenStore } from "./api";
+
+export async function streamChat(input: {
+  sessionId: string;
+  characterId: string;
+  content: string;
+  onEvent: (event: StreamEvent) => void;
+}) {
+  const token = tokenStore.get();
+
+  if (!token) {
+    throw new Error("Missing auth token");
+  }
+
+  const res = await fetch(`${API.base}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      sessionId: input.sessionId,
+      characterId: input.characterId,
+      content: input.content
+    })
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Stream failed with HTTP ${res.status}`);
+  }
+
+  if (!res.body) {
+    throw new Error("Stream response body is empty");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+
+    for (const chunk of chunks) {
+      const line = chunk
+        .split("\n")
+        .find((line) => line.startsWith("data:"));
+
+      if (!line) {
+        continue;
+      }
+
+      const raw = line.replace(/^data:\s*/, "");
+
+      try {
+        const event = JSON.parse(raw) as StreamEvent;
+        input.onEvent(event);
+      } catch {
+        console.warn("Invalid SSE event:", raw);
+      }
+    }
+  }
+}
+
+============================================================
+FILE: apps/web/src/components/ChatShell.tsx
+============================================================
+
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Sparkles } from "lucide-react";
+import { AuthGate } from "./AuthGate";
+import { characters, createSession } from "@/lib/api";
+import { streamChat } from "@/lib/streamChat";
+import { useChatStore } from "@/store/chat.store";
+import { MessageBubble } from "./MessageBubble";
+import { Composer } from "./Composer";
+import { RelationshipPanel } from "./RelationshipPanel";
+import { SceneAtmosphere } from "./SceneAtmosphere";
+
+function InnerChat() {
+  const st = useChatStore(); const [booting,setBooting]=useState(true);
+  const active = useMemo(()=>st.characters.find(c=>c.id===st.characterId) ?? null,[st.characters,st.characterId]);
+  useEffect(()=>{ let dead=false; async function boot(){ const data=await characters(); if(dead)return; st.setCharacters(data.characters); const first=data.characters[0]; if(first){ st.setCharacter(first.id); const s=await createSession(first.id); if(dead)return; st.setSession(s.id); st.addMessage({id:crypto.randomUUID(),role:'assistant',content:first.greeting,createdAt:Date.now()}); } setBooting(false); } boot().catch(()=>setBooting(false)); if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{}); return()=>{dead=true}; },[]);
+  async function send(content:string){ if(!st.sessionId||!st.characterId||st.isStreaming)return; st.addMessage({id:crypto.randomUUID(),role:'user',content,createdAt:Date.now()}); st.startAssistantStream(); await streamChat({sessionId:st.sessionId,characterId:st.characterId,content,onEvent:e=>{ if(e.type==='status')st.setStatus(e.stage); if(e.type==='token')st.appendToken(e.token); if(e.type==='meta')st.setMeta(e.relationship,e.scene); if(e.type==='done')st.finishStream(); if(e.type==='error'){st.appendToken(`\n\n[${e.message}]`); st.finishStream();}}}).catch(err=>{st.appendToken(`\n\n[Connection error: ${err instanceof Error?err.message:'unknown'}]`); st.finishStream();}); }
+  if(booting) return <main className="grid h-screen place-items-center"><div className="flex items-center gap-3 rounded-3xl border border-white/10 bg-white/[.06] px-8 py-6 shadow-glow backdrop-blur-2xl"><Sparkles className="h-5 w-5 animate-pulse"/>Wczytywanie świata...</div></main>;
+  return <main className="relative h-screen overflow-hidden"><SceneAtmosphere scene={st.scene}/><div className="relative z-10 grid h-screen grid-cols-1 gap-4 p-3 md:grid-cols-[1fr_360px] md:p-5"><section className="flex min-h-0 flex-col overflow-hidden rounded-[2rem] border border-white/10 bg-black/20 shadow-glow backdrop-blur-2xl"><header className="flex items-center justify-between border-b border-white/10 px-5 py-4"><div><h1 className="text-lg font-semibold">{active?.name ?? 'Aether'}</h1><p className="text-sm text-white/55">{active?.tagline ?? 'Persistent cinematic AI'}</p></div><div className="rounded-full border border-white/10 bg-white/[.06] px-3 py-1 text-xs text-white/60">{st.isStreaming ? st.status : 'online'}</div></header><div className="scrollbar-soft flex-1 space-y-5 overflow-y-auto px-4 py-6 md:px-8"><AnimatePresence initial={false}>{st.messages.map(m=><MessageBubble key={m.id} message={m}/>)}</AnimatePresence></div><Composer disabled={st.isStreaming} onSend={send}/></section><aside className="hidden min-h-0 md:block"><RelationshipPanel relationship={st.relationship} scene={st.scene}/></aside></div></main>;
+}
+export function ChatShell(){ return <AuthGate><InnerChat/></AuthGate>; }
+
+
+============================================================
+FILE: apps/web/src/store/chat.store.ts
+============================================================
+
+import { create } from "zustand";
+import type { RelationshipState, SceneState } from "@aether/shared";
+export type UiUser = { id:string; email:string; displayName:string };
+export type UiCharacter = { id:string; name:string; tagline:string|null; greeting:string; avatarUrl:string|null };
+export type UiMessage = { id:string; role:'user'|'assistant'; content:string; streaming?:boolean; createdAt:number };
+type State = {
+  user: UiUser|null; characters:UiCharacter[]; characterId:string|null; sessionId:string|null; messages:UiMessage[];
+  relationship:RelationshipState|null; scene:SceneState|null; isStreaming:boolean; status:string;
+  setUser:(u:UiUser|null)=>void; setCharacters:(c:UiCharacter[])=>void; setCharacter:(id:string)=>void; setSession:(id:string)=>void;
+  addMessage:(m:UiMessage)=>void; startAssistantStream:()=>void; appendToken:(t:string)=>void; finishStream:()=>void; setMeta:(r:RelationshipState,s:SceneState)=>void; setStatus:(s:string)=>void; reset:()=>void;
+};
+export const useChatStore = create<State>((set)=>({
+  user:null, characters:[], characterId:null, sessionId:null, messages:[], relationship:null, scene:null, isStreaming:false, status:'idle',
+  setUser:user=>set({user}), setCharacters:characters=>set({characters}), setCharacter:characterId=>set({characterId}), setSession:sessionId=>set({sessionId}),
+  addMessage:m=>set(st=>({messages:[...st.messages,m]})),
+  startAssistantStream:()=>set(st=>({isStreaming:true,messages:[...st.messages,{id:crypto.randomUUID(),role:'assistant',content:'',streaming:true,createdAt:Date.now()}]})),
+  appendToken:t=>set(st=>({messages:st.messages.map((m,i)=>i===st.messages.length-1&&m.streaming?{...m,content:m.content+t}:m)})),
+  finishStream:()=>set(st=>({isStreaming:false,status:'idle',messages:st.messages.map(m=>m.streaming?{...m,streaming:false}:m)})),
+  setMeta:(relationship,scene)=>set({relationship,scene}), setStatus:status=>set({status}),
+  reset:()=>set({sessionId:null,messages:[],relationship:null,scene:null,isStreaming:false,status:'idle'})
+}));
+
+
+============================================================
+FILE: packages/shared/src/index.ts
+============================================================
+
+import { z } from "zod";
+
+export const IdSchema = z.string().uuid();
+
+export const RelationshipStateSchema = z.object({
+  trust: z.number().min(0).max(100),
+  attachment: z.number().min(0).max(100),
+  comfort: z.number().min(0).max(100),
+  vulnerability: z.number().min(0).max(100),
+  jealousy: z.number().min(0).max(100),
+  emotionalEnergy: z.number().min(0).max(100),
+  conversationalRhythm: z.number().min(0).max(100),
+  intimacy: z.number().min(0).max(100),
+  tension: z.number().min(0).max(100),
+  protectiveness: z.number().min(0).max(100),
+  curiosity: z.number().min(0).max(100)
+});
+export type RelationshipState = z.infer<typeof RelationshipStateSchema>;
+
+export const SceneStateSchema = z.object({
+  location: z.string(),
+  timeOfDay: z.string(),
+  mood: z.string(),
+  weather: z.string(),
+  visualAtmosphere: z.string(),
+  activeConflict: z.string().nullable(),
+  recentBeat: z.string().nullable(),
+  continuityAnchor: z.string()
+});
+export type SceneState = z.infer<typeof SceneStateSchema>;
+
+export const MemoryTypeSchema = z.enum(["short_term", "long_term", "emotional", "narrative", "relationship", "style"]);
+export type MemoryType = z.infer<typeof MemoryTypeSchema>;
+
+export const ChatRoleSchema = z.enum(["system", "user", "assistant"]);
+export type ChatRole = z.infer<typeof ChatRoleSchema>;
+
+export const StyleProfileSchema = z.object({
+  proseDensity: z.number().min(0).max(100),
+  initiative: z.number().min(0).max(100),
+  emotionalExpressiveness: z.number().min(0).max(100),
+  messageLength: z.enum(["short", "medium", "long", "adaptive"]),
+  narrationStyle: z.enum(["cinematic", "novelistic", "casual", "texting", "dramatic"]),
+  perspective: z.enum(["first_person", "second_person", "third_person_limited"])
+});
+export type StyleProfile = z.infer<typeof StyleProfileSchema>;
+
+export const CharacterSchema = z.object({
+  id: z.string().uuid(),
+  ownerId: z.string().uuid().nullable(),
+  visibility: z.enum(["private", "public"]),
+  name: z.string(),
+  tagline: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+  persona: z.string(),
+  scenario: z.string(),
+  greeting: z.string(),
+  styleProfile: StyleProfileSchema,
+  createdAt: z.string()
+});
+export type Character = z.infer<typeof CharacterSchema>;
+
+export const ClientMessageSchema = z.object({
+  sessionId: z.string().uuid(),
+  characterId: z.string().uuid(),
+  content: z.string().min(1).max(16000),
+  modelPreference: z.string().optional()
+});
+export type ClientMessageInput = z.infer<typeof ClientMessageSchema>;
+
+export type StreamEvent =
+  | { type: "token"; token: string }
+  | { type: "status"; stage: "thinking" | "memory" | "relationship" | "generating" | "saving" }
+  | { type: "meta"; relationship: RelationshipState; scene: SceneState; model: string; quality: number }
+  | { type: "done"; messageId: string }
+  | { type: "error"; message: string };
+
+export const RegisterSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8).max(128),
+  displayName: z.string().min(2).max(80)
+});
+export type RegisterInput = z.infer<typeof RegisterSchema>;
+
+export const LoginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1).max(128)
+});
+export type LoginInput = z.infer<typeof LoginSchema>;
+

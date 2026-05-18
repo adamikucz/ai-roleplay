@@ -6,6 +6,7 @@ create table if not exists users (
   email text not null unique,
   password_hash text not null,
   display_name text not null,
+  language text not null default 'pl',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -17,6 +18,7 @@ create table if not exists characters (
   name text not null,
   tagline text,
   avatar_url text,
+  description text,
   persona text not null,
   scenario text not null,
   greeting text not null,
@@ -32,6 +34,8 @@ create table if not exists sessions (
   title text not null default 'New Scene',
   scene_state jsonb not null,
   last_model text,
+  language text not null default 'pl',
+  archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

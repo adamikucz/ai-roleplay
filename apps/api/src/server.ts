@@ -28,7 +28,8 @@ app.get("/healthz", async () => {
   };
 });
 
-await app.register(cors, { origin: env.WEB_ORIGIN, credentials: true });
+const origins = env.WEB_ORIGIN.split(',').map(s => s.trim());
+await app.register(cors, { origin: origins, credentials: true });
 await app.register(sensible);
 await app.register(rateLimit, { max: 240, timeWindow: '1 minute' });
 await app.register(websocket, { options: { maxPayload: 1024 * 1024 * 2 } });

@@ -16,23 +16,30 @@ import { sha256 } from "../utils/hash.js";
 
 export async function generateTurn(input: { userId:string; payload:unknown; signal?:AbortSignal; emit:(event:StreamEvent)=>void }) {
   const body = ClientMessageSchema.parse(input.payload);
+  const language = body.language ?? 'pl';
+
   input.emit({ type:'status', stage:'memory' });
   const [character, session] = await Promise.all([getCharacter(body.characterId, input.userId), getSession(body.sessionId, input.userId)]);
   if (!character) throw new Error('Character not found');
   if (!session) throw new Error('Session not found');
+
   await createMessage({ sessionId: body.sessionId, role:'user', content: body.content });
+
   input.emit({ type:'status', stage:'relationship' });
   const previous = await getRelationshipState(input.userId, body.characterId);
   const relationship = evolveRelationship({ previous, userMessage: body.content });
   await upsertRelationshipState(input.userId, body.characterId, relationship);
+
   const [memoryContext, contextMessages] = await Promise.all([
     retrieveMemoryContext({ userId: input.userId, characterId: body.characterId, sessionId: body.sessionId }),
     reconstructContext(body.sessionId)
   ]);
-  const system = composeSystemPrompt({ character, relationship, scene: session.scene_state, memoryContext });
+
+  const system = composeSystemPrompt({ character, relationship, scene: session.scene_state, memoryContext, language });
   const emotionalIntensity = relationship.tension*.32 + relationship.intimacy*.23 + relationship.vulnerability*.23 + relationship.attachment*.12 + relationship.jealousy*.10;
   const route = chooseModel({ preference: body.modelPreference, emotionalIntensity, contextChars: JSON.stringify(contextMessages).length, lastModel: session.last_model });
   const messages = [{ role:'system' as const, content: system }, ...contextMessages];
+
   input.emit({ type:'status', stage:'generating' });
   let generated = ''; let latencyMs = 0; let usedModel = route.primary; let lastError: unknown;
   for (const model of [route.primary, ...route.fallback]) {
@@ -43,15 +50,19 @@ export async function generateTurn(input: { userId:string; payload:unknown; sign
     } catch (e) { lastError = e; }
   }
   if (!generated.trim()) throw lastError instanceof Error ? lastError : new Error('Generation failed');
+
   const quality = scoreResponse({ response: generated, relationship, userMessage: body.content });
   input.emit({ type:'status', stage:'saving' });
+
   const message = await createMessage({ sessionId: body.sessionId, role:'assistant', content: generated, model: usedModel, qualityScore: quality });
   const scene = evolveScene({ previous: session.scene_state, userMessage: body.content, assistantMessage: generated });
+
   await Promise.all([
     updateSessionScene({ sessionId: body.sessionId, userId: input.userId, scene, model: usedModel }),
     writeTurnMemories({ userId: input.userId, characterId: body.characterId, sessionId: body.sessionId, userMessage: body.content, assistantMessage: generated }),
     query(`insert into generation_audits (session_id, model, prompt_hash, latency_ms, quality_score) values ($1,$2,$3,$4,$5)`, [body.sessionId, usedModel, sha256(system), latencyMs, quality])
   ]);
+
   input.emit({ type:'meta', relationship, scene, model: usedModel, quality });
   input.emit({ type:'done', messageId: message.id });
 }

@@ -1,4 +1,5 @@
 import pg from "pg";
+import type { QueryResultRow } from "pg";
 import { env } from "../env.js";
 
 const { Pool } = pg;
@@ -10,7 +11,7 @@ export const pool = new Pool({
     : undefined
 });
 
-export async function query<T = unknown>(text: string, params: unknown[] = []) {
+export async function query<T extends QueryResultRow = any>(text: string, params: unknown[] = []) {
   return pool.query<T>(text, params);
 }
 
