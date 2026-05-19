@@ -102,15 +102,15 @@ export type StreamEvent =
   | { type: "error"; message: string };
 
 export const RegisterSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8).max(128),
-  displayName: z.string().min(2).max(80)
+  email: z.string().email({ message: "Podaj poprawny adres e-mail." }),
+  password: z.string().min(8, { message: "Hasło musi mieć co najmniej 8 znaków." }).max(128, { message: "Hasło jest za długie." }),
+  displayName: z.string().min(2, { message: "Nazwa musi mieć co najmniej 2 znaki." }).max(80, { message: "Nazwa jest za długa." })
 });
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 
 export const LoginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1).max(128)
+  email: z.string().email({ message: "Podaj poprawny adres e-mail." }),
+  password: z.string().min(1, { message: "Podaj hasło." }).max(128)
 });
 export type LoginInput = z.infer<typeof LoginSchema>;
 
