@@ -19,7 +19,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   
-  if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+  if (!res.ok) {
+    let errMsg = `HTTP ${res.status}`;
+    try {
+      const text = await res.text();
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.message === 'string') {
+          errMsg = parsed.message;
+        } else if (parsed && typeof parsed.error === 'string') {
+          errMsg = parsed.error;
+        }
+      } catch {
+        if (text) errMsg = text;
+      }
+    } catch {}
+    throw new Error(errMsg);
+  }
   return res.json() as Promise<T>;
 }
 

@@ -68,6 +68,13 @@ export async function characterRoutes(app: FastifyInstance) {
       };
     } catch (error) {
       if (error instanceof Error && error.message === 'Unauthorized') return reply.unauthorized('Unauthorized');
+      if (error instanceof Error && (error.message.includes('429') || error.message.includes('rate-limited'))) {
+        return reply.status(429).send({
+          statusCode: 429,
+          error: 'Too Many Requests',
+          message: 'Wszystkie darmowe modele OpenRouter są obecnie przeciążone (Rate Limit). Spróbuj ponownie za 10-15 sekund.'
+        });
+      }
       throw error;
     }
   });

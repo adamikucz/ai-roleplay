@@ -40,7 +40,8 @@ Return ONLY valid JSON, no markdown fences, no explanation.`;
   const modelsToTry = [
     'meta-llama/llama-3.3-70b-instruct:free',
     'qwen/qwen3-next-80b-a3b-instruct:free',
-    'google/gemma-4-31b-it:free'
+    'google/gemma-4-31b-it:free',
+    'openrouter/free'
   ];
 
   for (let i = 0; i < modelsToTry.length; i++) {
@@ -63,8 +64,8 @@ Return ONLY valid JSON, no markdown fences, no explanation.`;
       });
 
       if (res.status === 429) {
-        // Rate limited, wait 1.5s and try next model
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Rate limited, wait 2s and try next model
+        await new Promise(resolve => setTimeout(resolve, 2000));
         continue;
       }
 
@@ -73,11 +74,21 @@ Return ONLY valid JSON, no markdown fences, no explanation.`;
       }
     } catch (err) {
       if (i === modelsToTry.length - 1) throw err;
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
 
   if (!res || !res.ok) {
+    if (res && res.status === 429) {
+      try {
+        const body = await res.json();
+        if (body?.error?.message) {
+          throw new Error(`OpenRouter 429: ${body.error.message}`);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('OpenRouter 429:')) throw e;
+      }
+    }
     throw new Error(`Character generation failed: ${res ? res.status : 'No response'}`);
   }
 
