@@ -45,7 +45,7 @@ Return ONLY valid JSON, no markdown fences, no explanation.`;
       'X-Title': env.OPENROUTER_APP_NAME
     },
     body: JSON.stringify({
-      model: 'openai/gpt-4o-mini',
+      model: 'meta-llama/llama-3.3-70b-instruct:free',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.82,
       max_tokens: 1200
