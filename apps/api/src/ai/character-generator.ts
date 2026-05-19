@@ -36,24 +36,49 @@ Infer the style profile from the description's tone. If the description mentions
 
 Return ONLY valid JSON, no markdown fences, no explanation.`;
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': env.OPENROUTER_SITE_URL,
-      'X-Title': env.OPENROUTER_APP_NAME
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.82,
-      max_tokens: 1200
-    })
-  });
+  let res: Response | null = null;
+  const modelsToTry = [
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'qwen/qwen-3-80b-instruct:free',
+    'google/gemma-2-9b-it:free'
+  ];
 
-  if (!res.ok) {
-    throw new Error(`Character generation failed: ${res.status}`);
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const model = modelsToTry[i]!;
+    try {
+      res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': env.OPENROUTER_SITE_URL,
+          'X-Title': env.OPENROUTER_APP_NAME
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.82,
+          max_tokens: 1200
+        })
+      });
+
+      if (res.status === 429) {
+        // Rate limited, wait 1.5s and try next model
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        continue;
+      }
+
+      if (res.ok) {
+        break;
+      }
+    } catch (err) {
+      if (i === modelsToTry.length - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  if (!res || !res.ok) {
+    throw new Error(`Character generation failed: ${res ? res.status : 'No response'}`);
   }
 
   const data = await res.json() as any;
