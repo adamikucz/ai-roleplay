@@ -51,12 +51,12 @@ export const SUPPORTED_LANGUAGES = [
 export type SupportedLanguageCode = typeof SUPPORTED_LANGUAGES[number]['code'];
 
 export const SUPPORTED_MODELS = [
-  { id: 'qwen/qwen-3-80b-instruct:free', label: 'Qwen3 Next 80B A3B Instruct' },
+  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', label: 'Qwen3 Next 80B A3B Instruct' },
   { id: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B Instruct' },
-  { id: 'google/gemma-4-31b:free', label: 'Gemma 4 31B' },
-  { id: 'google/gemma-4-26b-a4b:free', label: 'Gemma 4 26B A4B' },
+  { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B' },
+  { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B A4B' },
   { id: 'deepseek/deepseek-v4-flash:free', label: 'DeepSeek V4 Flash' },
-  { id: 'nvidia/nemotron-3-nano-omni:free', label: 'Nemotron 3 Nano Omni' },
+  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', label: 'Nemotron 3 Nano Omni' },
   { id: 'cognitivecomputations/dolphin3.0-r1-mistral-24b:free', label: 'Uncensored (Dolphin R1)' }
 ] as const;
 export type SupportedModelId = typeof SUPPORTED_MODELS[number]['id'];

@@ -39,8 +39,8 @@ Return ONLY valid JSON, no markdown fences, no explanation.`;
   let res: Response | null = null;
   const modelsToTry = [
     'meta-llama/llama-3.3-70b-instruct:free',
-    'qwen/qwen-3-80b-instruct:free',
-    'google/gemma-2-9b-it:free'
+    'qwen/qwen3-next-80b-a3b-instruct:free',
+    'google/gemma-4-31b-it:free'
   ];
 
   for (let i = 0; i < modelsToTry.length; i++) {
