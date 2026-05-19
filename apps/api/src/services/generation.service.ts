@@ -55,10 +55,10 @@ export async function generateTurn(input: { userId:string; payload:unknown; sign
   let newRelationship = { ...previousRelationship };
   const updateMatch = generated.match(/<relationship_update>([\s\S]*?)<\/relationship_update>/);
   if (updateMatch) {
-    const changes = updateMatch[1];
+    const changes = updateMatch[1] || '';
     const parseDelta = (key: string) => {
       const match = changes.match(new RegExp(`<${key}>([+-]?\\d+)<\/${key}>`));
-      return match ? parseInt(match[1], 10) : 0;
+      return match ? parseInt(match[1] || '0', 10) : 0;
     };
     
     // clamp function locally since we removed evolveRelationship

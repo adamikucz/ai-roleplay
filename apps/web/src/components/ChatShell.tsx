@@ -19,7 +19,7 @@ import { MessageBubble } from "./MessageBubble";
 import { Composer } from "./Composer";
 import { RelationshipPanel } from "./RelationshipPanel";
 import { SceneAtmosphere } from "./SceneAtmosphere";
-import type { SessionListItem } from "@aether/shared";
+import { SUPPORTED_MODELS, type SessionListItem } from "@aether/shared";
 
 function InnerChat() {
   const st = useChatStore();
@@ -205,6 +205,7 @@ function InnerChat() {
       characterId: st.characterId,
       content,
       language: st.language,
+      modelPreference: st.selectedModel,
       onEvent: e => {
         if (e.type === 'status') st.setStatus(e.stage);
         if (e.type === 'token') st.appendToken(e.token);
@@ -311,9 +312,23 @@ function InnerChat() {
               </div>
             </div>
 
-            <div className={`status-badge ${st.isStreaming ? 'streaming' : ''}`}>
-              <span className="dot" />
-              {st.isStreaming ? st.status : 'online'}
+            <div className="flex items-center gap-3">
+              <select
+                value={st.selectedModel}
+                onChange={(e) => st.setSelectedModel(e.target.value)}
+                className="bg-transparent border border-white/[0.08] text-white/60 hover:text-white/80 rounded-lg px-2.5 py-1 text-[11px] font-medium outline-none focus:border-white/20 transition cursor-pointer max-w-[120px] sm:max-w-xs"
+              >
+                {SUPPORTED_MODELS.map(m => (
+                  <option key={m.id} value={m.id} className="bg-[#0f0f12] text-white">
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+
+              <div className={`status-badge ${st.isStreaming ? 'streaming' : ''} hidden sm:inline-flex`}>
+                <span className="dot" />
+                {st.isStreaming ? st.status : 'online'}
+              </div>
             </div>
           </header>
 

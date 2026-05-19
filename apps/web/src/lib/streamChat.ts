@@ -6,6 +6,7 @@ export async function streamChat(input: {
   characterId: string;
   content: string;
   language?: string;
+  modelPreference?: string;
   onEvent: (event: StreamEvent) => void;
 }) {
   const token = tokenStore.get();
@@ -25,7 +26,8 @@ export async function streamChat(input: {
       sessionId: input.sessionId,
       characterId: input.characterId,
       content: input.content,
-      language: input.language
+      language: input.language,
+      modelPreference: input.modelPreference
     })
   });
 

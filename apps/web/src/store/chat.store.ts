@@ -26,6 +26,7 @@ type State = {
   isStreaming: boolean;
   status: string;
   language: string;
+  selectedModel: string;
   sidebarOpen: boolean;
   botCreatorOpen: boolean;
 
@@ -42,6 +43,7 @@ type State = {
   setMeta: (r:RelationshipState, s:SceneState) => void;
   setStatus: (s:string) => void;
   setLanguage: (l:string) => void;
+  setSelectedModel: (m:string) => void;
   setSidebarOpen: (open:boolean) => void;
   setBotCreatorOpen: (open:boolean) => void;
   reset: () => void;
@@ -60,6 +62,7 @@ export const useChatStore = create<State>((set) => ({
   isStreaming: false,
   status: 'idle',
   language: detectLanguage(),
+  selectedModel: typeof window !== 'undefined' ? localStorage.getItem('aether_model') || 'meta-llama/llama-3.3-70b-instruct:free' : 'meta-llama/llama-3.3-70b-instruct:free',
   sidebarOpen: false,
   botCreatorOpen: false,
 
@@ -93,6 +96,11 @@ export const useChatStore = create<State>((set) => ({
   setLanguage: (language) => {
     if (typeof window !== 'undefined') localStorage.setItem('aether_language', language);
     set({ language });
+  },
+
+  setSelectedModel: (selectedModel) => {
+    if (typeof window !== 'undefined') localStorage.setItem('aether_model', selectedModel);
+    set({ selectedModel });
   },
 
   setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
